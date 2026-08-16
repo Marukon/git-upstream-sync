@@ -178,5 +178,11 @@
     "upstream": "pingfanfan/SBTI",
     "branch": "main",
     "notify": true
+  },
+  {
+    "fork": "Marukon/WebTooys",
+    "upstream": "for-the-zero/WebTooys",
+    "branch": "master",
+    "notify": true
   }
 ]
