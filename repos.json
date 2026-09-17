@@ -72,12 +72,6 @@
     "notify": true
   },
   {
-    "fork": "Marukon/jq-web",
-    "upstream": "fiatjaf/jq-web",
-    "branch": "master",
-    "notify": true
-  },
-  {
     "fork": "Marukon/win11React",
     "upstream": "blueedgetechno/win11React",
     "branch": "master",
@@ -171,6 +165,12 @@
     "fork": "Marukon/LuckyTool",
     "upstream": "luckyzyx/LuckyTool",
     "branch": "main",
+    "notify": true
+  },
+  {
+    "fork": "Marukon/tieba_lite",
+    "upstream": "odlove/tieba_lite",
+    "branch": "master",
     "notify": true
   }
 ]
