@@ -72,12 +72,6 @@
     "notify": true
   },
   {
-    "fork": "Marukon/fancy-translator",
-    "upstream": "daidr/fancy-translator",
-    "branch": "main",
-    "notify": true
-  },
-  {
     "fork": "Marukon/jq-web",
     "upstream": "fiatjaf/jq-web",
     "branch": "master",
@@ -126,12 +120,6 @@
     "notify": true
   },
   {
-    "fork": "Marukon/MouseInc.Settings",
-    "upstream": "shuax/MouseInc.Settings",
-    "branch": "main",
-    "notify": true
-  },
-  {
     "fork": "Marukon/i-tools",
     "upstream": "iLay1678/i-tools",
     "branch": "main",
@@ -168,12 +156,6 @@
     "notify": true
   },
   {
-    "fork": "Marukon/office-website",
-    "upstream": "baotlake/office-website",
-    "branch": "main",
-    "notify": true
-  },
-  {
     "fork": "Marukon/SBTI",
     "upstream": "pingfanfan/SBTI",
     "branch": "main",
@@ -183,6 +165,12 @@
     "fork": "Marukon/WebTooys",
     "upstream": "for-the-zero/WebTooys",
     "branch": "master",
+    "notify": true
+  },
+  {
+    "fork": "Marukon/LuckyTool",
+    "upstream": "luckyzyx/LuckyTool",
+    "branch": "main",
     "notify": true
   }
 ]
