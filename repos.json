@@ -172,5 +172,11 @@
     "upstream": "odlove/tieba_lite",
     "branch": "master",
     "notify": true
+  },
+  {
+    "fork": "Marukon/Sesame-M",
+    "upstream": "aw1y2z/Sesame-M",
+    "branch": "MIUIX-api102",
+    "notify": true
   }
 ]
