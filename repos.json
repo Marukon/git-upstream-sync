@@ -178,5 +178,11 @@
     "upstream": "aw1y2z/Sesame-M",
     "branch": "MIUIX-api102",
     "notify": true
+  },
+  {
+    "fork": "Marukon/upright",
+    "upstream": "LinklyAI/upright",
+    "branch": "main",
+    "notify": true
   }
 ]
