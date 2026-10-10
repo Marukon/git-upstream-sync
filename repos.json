@@ -184,5 +184,11 @@
     "upstream": "LinklyAI/upright",
     "branch": "main",
     "notify": true
+  },
+  {
+    "fork": "Marukon/VibeOffice",
+    "upstream": "tcchen2026/VibeOffice",
+    "branch": "main",
+    "notify": true
   }
 ]
