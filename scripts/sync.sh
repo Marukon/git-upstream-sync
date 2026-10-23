@@ -121,7 +121,7 @@ for row in $(jq -c '.[]' "$CONFIG"); do
   if [ -z "$UPSTREAM_SHA" ] || [ "$UPSTREAM_SHA" == "null" ]; then
       echo "⚠️ Failed to fetch upstream SHA for $upstream. Skipping."
       FAILED=$((FAILED + 1))
-      FAILED_REPOS+="❌ $(escape_html "$fork ($branch)")\n"
+      FAILED_REPOS+="❌ $(escape_html "$fork ($branch)")"$'\n'
       continue
   fi
 
@@ -206,7 +206,18 @@ for row in $(jq -c '.[]' "$CONFIG"); do
 
                   # 合并 upstream，使用 -X ours 优先保障用户改动冲突时安全保留
                   if ! git merge -X ours "upstream/$branch" --no-edit --allow-unrelated-histories -m "chore(sync): sync upstream $branch" &>> "$LOG_FILE"; then
-                      echo "❌ Merge failed!"
+                      # 若出现文件结构性冲突（如一方修改另一方删除），强制以 ours（用户修改）解决并完成提交
+                      if [ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+                          echo "⚠️ Structural conflict detected, resolving with --ours..." &>> "$LOG_FILE"
+                          git checkout --ours -- . &>> "$LOG_FILE" || true
+                          git add -A &>> "$LOG_FILE" || true
+                          git commit --no-edit -m "chore(sync): sync upstream $branch (resolved with ours)" &>> "$LOG_FILE" || true
+                      fi
+                  fi
+
+                  # 检查是否合并完成（工作区是否干净）
+                  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+                      echo "❌ Merge failed (unresolved conflicts)!"
                       SYNC_STATUS="fail"
                   else
                       echo "✅ Merge success, pushing (keeping user commits + single sync commit)..."
@@ -227,7 +238,7 @@ for row in $(jq -c '.[]' "$CONFIG"); do
   if [ "$SYNC_STATUS" = "success" ] || [ "$SYNC_STATUS" = "skipped_push" ]; then
       if [ "$SYNC_STATUS" = "success" ]; then
           SUCCESS=$((SUCCESS + 1))
-          UPDATED_REPOS+="✅ $(escape_html "$fork ($branch)")\n"
+          UPDATED_REPOS+="✅ $(escape_html "$fork ($branch)")"$'\n'
       else
           NOCHANGE=$((NOCHANGE + 1))
       fi
@@ -235,18 +246,18 @@ for row in $(jq -c '.[]' "$CONFIG"); do
       jq --arg key "$CACHE_KEY" --arg sha "$UPSTREAM_SHA" '.[$key] = $sha' "$CACHE_FILE" > "${CACHE_FILE}.tmp" && mv "${CACHE_FILE}.tmp" "$CACHE_FILE"
   else
       FAILED=$((FAILED + 1))
-      FAILED_REPOS+="❌ $(escape_html "$fork ($branch)")\n"
+      FAILED_REPOS+="❌ $(escape_html "$fork ($branch)")"$'\n'
 
       ERROR_LOG=""
       if [ -f "$LOG_FILE" ]; then
           ERROR_LOG=$(tail -n 15 "$LOG_FILE")
       fi
 
-      FAIL_MSG="❌ <b>Sync Failed</b>\n"
-      FAIL_MSG+="<b>Repo:</b> $(escape_html "$fork")\n"
-      FAIL_MSG+="<b>Branch:</b> $(escape_html "$branch")\n"
-      FAIL_MSG+="<b>Upstream:</b> $(escape_html "$upstream")\n\n"
-      FAIL_MSG+="📝 <b>Log:</b>\n<pre>$(escape_html "$ERROR_LOG")</pre>"
+      FAIL_MSG="❌ <b>Sync Failed</b>"$'\n'
+      FAIL_MSG+="<b>Repo:</b> $(escape_html "$fork")"$'\n'
+      FAIL_MSG+="<b>Branch:</b> $(escape_html "$branch")"$'\n'
+      FAIL_MSG+="<b>Upstream:</b> $(escape_html "$upstream")"$'\n\n'
+      FAIL_MSG+="📝 <b>Log:</b>"$'\n<pre>'$(escape_html "$ERROR_LOG")'</pre>'
 
       send_telegram "$FAIL_MSG" "HTML"
   fi
@@ -259,19 +270,19 @@ if [ "$TOTAL" -eq "$NOCHANGE" ]; then
     exit 0
 fi
 
-REPORT="📊 <b>Github 上游同步报告</b>\n"
-REPORT+="🕒 <b>时间：</b>${TZ_TIME}\n\n"
-REPORT+="📦 <b>仓库总数：</b>${TOTAL}\n"
-REPORT+="➖ <b>无变化：</b>${NOCHANGE}\n"
-REPORT+="🟢 <b>成功更新：</b>${SUCCESS}\n"
-REPORT+="🔴 <b>更新失败：</b>${FAILED}\n"
+REPORT="📊 <b>Github 上游同步报告</b>"$'\n'
+REPORT+="🕒 <b>时间：</b>${TZ_TIME}"$'\n\n'
+REPORT+="📦 <b>仓库总数：</b>${TOTAL}"$'\n'
+REPORT+="➖ <b>无变化：</b>${NOCHANGE}"$'\n'
+REPORT+="🟢 <b>成功更新：</b>${SUCCESS}"$'\n'
+REPORT+="🔴 <b>更新失败：</b>${FAILED}"$'\n'
 
 if [ -n "$UPDATED_REPOS" ]; then
-    REPORT+="\n🚀 <b>更新列表：</b>\n${UPDATED_REPOS}"
+    REPORT+=$'\n'"🚀 <b>更新列表：</b>"$'\n'"${UPDATED_REPOS}"
 fi
 
 if [ -n "$FAILED_REPOS" ]; then
-    REPORT+="\n💥 <b>失败列表：</b>\n${FAILED_REPOS}"
+    REPORT+=$'\n'"💥 <b>失败列表：</b>"$'\n'"${FAILED_REPOS}"
 fi
 
 send_telegram "$REPORT" "HTML"
