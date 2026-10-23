@@ -2,11 +2,11 @@
 set -u
 
 # 接收配置文件路径
-CONFIG=$1
+CONFIG="${1:-repos.json}"
 CACHE_FILE="sync_state.json"
+FORCE_SYNC="${FORCE_SYNC:-false}"
 
 # ================= INIT =================
-# 如果缓存文件不存在，初始化为空 JSON
 if [ ! -f "$CACHE_FILE" ]; then
   echo "{}" > "$CACHE_FILE"
 fi
@@ -27,7 +27,67 @@ if ! command -v jq &> /dev/null; then
     exit 1
 fi
 
-echo "🚀 Starting Sync Job at $TZ_TIME"
+echo "🚀 Starting Sync Job at $TZ_TIME (Force Sync: $FORCE_SYNC)"
+
+# 转义 HTML 特殊字符
+escape_html() {
+    local s="$1"
+    s="${s//&/&amp;}"
+    s="${s//</&lt;}"
+    s="${s//>/&gt;}"
+    printf '%s' "$s"
+}
+
+# Telegram 消息发送函数（优先 HTML，带错误捕获与纯文本降级保护）
+send_telegram() {
+    local text="$1"
+    local mode="${2:-HTML}"
+    
+    if [ -z "${TG_BOT_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+        echo "⚠️ TG_BOT_TOKEN or TG_CHAT_ID is not set. Skipping Telegram notification."
+        return 0
+    fi
+
+    local response
+    response=$(curl -s -S -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+        -d chat_id="${TG_CHAT_ID}" \
+        -d parse_mode="${mode}" \
+        --data-urlencode "text=${text}" 2>&1)
+
+    if echo "$response" | grep -q '"ok":true'; then
+        echo "✅ Telegram notification sent successfully."
+    else
+        echo "⚠️ Telegram notification failed in ${mode} mode: $response"
+        echo "🔄 Retrying in plain text mode..."
+        local fallback_resp
+        fallback_resp=$(curl -s -S -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            --data-urlencode "text=${text}" 2>&1)
+        if echo "$fallback_resp" | grep -q '"ok":true'; then
+            echo "✅ Telegram notification delivered via plain text fallback."
+        else
+            echo "❌ Telegram plain text fallback failed: $fallback_resp"
+        fi
+    fi
+}
+
+# 判定是否为自动同步生成的 bot 提交
+is_bot_commit() {
+    local commit="$1"
+    local an ae msg
+    an=$(git log -1 --format="%an" "$commit" 2>/dev/null || echo "")
+    ae=$(git log -1 --format="%ae" "$commit" 2>/dev/null || echo "")
+    msg=$(git log -1 --format="%s" "$commit" 2>/dev/null || echo "")
+
+    if [[ "$an" == *"github-actions[bot]"* ]] || \
+       [[ "$ae" == *"github-actions[bot]"* ]] || \
+       [[ "$ae" == *"action@github.com"* ]] || \
+       [[ "$msg" =~ ^Merge\ remote-tracking\ branch\ \'upstream/ ]] || \
+       [[ "$msg" =~ ^chore\(sync\) ]]; then
+        return 0
+    fi
+    return 1
+}
 
 # ================= LOOP =================
 for row in $(jq -c '.[]' "$CONFIG"); do
@@ -44,14 +104,24 @@ for row in $(jq -c '.[]' "$CONFIG"); do
 
   # [STEP 1] 获取 Upstream 特定分支的最新 SHA
   UPSTREAM_API="https://api.github.com/repos/$upstream/commits/$branch"
-  UPSTREAM_DATA=$(curl -s -H "Authorization: token $GH_PAT" "$UPSTREAM_API")
-  UPSTREAM_SHA=$(echo "$UPSTREAM_DATA" | jq -r '.sha')
+  AUTH_HEADER=""
+  if [ -n "${GH_PAT:-}" ]; then
+      AUTH_HEADER="Authorization: token $GH_PAT"
+  fi
+
+  if [ -n "$AUTH_HEADER" ]; then
+      UPSTREAM_DATA=$(curl -s -H "$AUTH_HEADER" "$UPSTREAM_API")
+  else
+      UPSTREAM_DATA=$(curl -s "$UPSTREAM_API")
+  fi
+
+  UPSTREAM_SHA=$(echo "$UPSTREAM_DATA" | jq -r '.sha // empty')
 
   # 异常处理
-  if [ "$UPSTREAM_SHA" == "null" ] || [ -z "$UPSTREAM_SHA" ]; then
-      echo "⚠️  Failed to fetch upstream SHA for $upstream. Skipping."
+  if [ -z "$UPSTREAM_SHA" ] || [ "$UPSTREAM_SHA" == "null" ]; then
+      echo "⚠️ Failed to fetch upstream SHA for $upstream. Skipping."
       FAILED=$((FAILED + 1))
-      FAILED_REPOS+="❌ $fork ($branch)%0A"
+      FAILED_REPOS+="❌ $(escape_html "$fork ($branch)")\n"
       continue
   fi
 
@@ -62,132 +132,148 @@ for row in $(jq -c '.[]' "$CONFIG"); do
   echo "   Upstream Latest: ${UPSTREAM_SHA:0:7}"
   echo "   Last Synced:     ${LAST_SYNCED_SHA:0:7}"
 
-  # 缓存命中：跳过
-  if [ "$UPSTREAM_SHA" == "$LAST_SYNCED_SHA" ]; then
+  # 缓存命中：若非强制同步且 SHA 相同，则跳过
+  if [ "$FORCE_SYNC" != "true" ] && [ "$UPSTREAM_SHA" == "$LAST_SYNCED_SHA" ]; then
       echo "✅ No changes (Cache Hit). Skipping."
       NOCHANGE=$((NOCHANGE + 1))
       continue
   fi
 
-  echo "⚡ Update detected (New SHA), syncing..."
+  echo "⚡ Syncing $fork ($branch)..."
 
   # ================= SYNC PROCESS =================
   rm -rf repo
-  
-  # Clone 你的 Fork 仓库
-  git clone "https://$GH_PAT@github.com/$fork.git" repo
-  cd repo || exit
-
-  git config user.name  "github-actions[bot]"
-  git config user.email "github-actions[bot]@users.noreply.github.com"
-
-  # 添加上游源
-  git remote add upstream "https://github.com/$upstream.git"
-  
-  echo "⬇️  Fetching ONLY upstream/$branch (No Tags)..."
-  # 只拉取上游指定分支
-  git fetch --no-tags upstream "$branch:refs/remotes/upstream/$branch"
-
-  echo "🔀 Checking out branch..."
-  if ! git checkout -B "$branch" "origin/$branch"; then
-      echo "❌ Checkout failed! (Branch might not exist on origin?)"
-      FAILED=$((FAILED + 1))
-      FAILED_REPOS+="❌ $fork ($branch)%0A"
-      cd ..
-      rm -rf repo
-      continue
-  fi
-
   LOG_FILE="../sync_error.log"
   rm -f "$LOG_FILE"
   SYNC_STATUS="success"
 
-  echo "🔄 Merging..."
-  
-  MERGE_OUTPUT=$(git merge -X ours "upstream/$branch" --no-edit --allow-unrelated-histories 2>&1 | tee "$LOG_FILE")
-  MERGE_EXIT_CODE=${PIPESTATUS[0]}
-
-  if [ $MERGE_EXIT_CODE -ne 0 ]; then
-      echo "❌ Merge failed!"
+  if ! git clone "https://$GH_PAT@github.com/$fork.git" repo &>> "$LOG_FILE"; then
+      echo "❌ Git clone failed for $fork!"
       SYNC_STATUS="fail"
   else
-      if echo "$MERGE_OUTPUT" | grep -q "Already up to date"; then
-          echo "✅ Already up to date (No actual changes needed)."
-          SYNC_STATUS="skipped_push"
+      cd repo || exit 1
+
+      git config user.name  "github-actions[bot]"
+      git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      git remote add upstream "https://github.com/$upstream.git"
+
+      echo "⬇️  Fetching ONLY upstream/$branch..."
+      if ! git fetch --no-tags upstream "$branch:refs/remotes/upstream/$branch" &>> "$LOG_FILE"; then
+          echo "❌ Git fetch upstream failed!"
+          SYNC_STATUS="fail"
       else
-          echo "✅ Merge success, pushing..."
-          if ! git push "https://$GH_PAT@github.com/$fork.git" "$branch" &>> "$LOG_FILE"; then
-              echo "❌ Push failed!"
+          echo "🔀 Checking out branch $branch..."
+          if ! git checkout -B "$branch" "origin/$branch" &>> "$LOG_FILE"; then
+              echo "❌ Checkout failed! (Branch might not exist on origin?)"
               SYNC_STATUS="fail"
+          else
+              # 核心同步与保留用户提交逻辑
+              # 1. 查找基础提交：自 HEAD 向后跳过所有旧的 bot 同步提交
+              CURR="HEAD"
+              while is_bot_commit "$CURR"; do
+                  PARENT=$(git rev-parse "${CURR}^1" 2>/dev/null || true)
+                  if [ -z "$PARENT" ]; then
+                      break
+                  fi
+                  CURR="$PARENT"
+              done
+
+              BASE_COMMIT=$(git rev-parse "$CURR")
+              echo "   Base Commit: ${BASE_COMMIT:0:7}"
+
+              # 2. 判断用户是否存在自定义提交
+              if git merge-base --is-ancestor "$BASE_COMMIT" "upstream/$branch" 2>/dev/null; then
+                  # 用户无自定义提交（独有 commit 均为旧 bot 提交或无额外提交）
+                  # 若当前 HEAD 已与 upstream 完全一致，则无需重复 push
+                  if [ "$(git rev-parse HEAD)" == "$UPSTREAM_SHA" ]; then
+                      echo "✅ Already aligned with upstream. No changes needed."
+                      SYNC_STATUS="skipped_push"
+                  else
+                      echo "🧹 Pure fork detected (no custom commits). Aligning directly with upstream..."
+                      git reset --hard "upstream/$branch"
+                      if ! git push --force "https://$GH_PAT@github.com/$fork.git" "$branch" &>> "$LOG_FILE"; then
+                          echo "❌ Push failed!"
+                          SYNC_STATUS="fail"
+                      else
+                          echo "✅ Successfully aligned with upstream."
+                      fi
+                  fi
+              else
+                  # 用户存在自定义提交：保留用户提交，自动同步提交有且仅保留最新的一个
+                  echo "🌟 User custom commits detected! Resetting to base (${BASE_COMMIT:0:7}) and merging upstream..."
+                  git reset --hard "$BASE_COMMIT"
+
+                  # 合并 upstream，使用 -X ours 优先保障用户改动冲突时安全保留
+                  if ! git merge -X ours "upstream/$branch" --no-edit --allow-unrelated-histories -m "chore(sync): sync upstream $branch" &>> "$LOG_FILE"; then
+                      echo "❌ Merge failed!"
+                      SYNC_STATUS="fail"
+                  else
+                      echo "✅ Merge success, pushing (keeping user commits + single sync commit)..."
+                      if ! git push --force "https://$GH_PAT@github.com/$fork.git" "$branch" &>> "$LOG_FILE"; then
+                          echo "❌ Push failed!"
+                          SYNC_STATUS="fail"
+                      fi
+                  fi
+              fi
           fi
       fi
+
+      cd ..
+      rm -rf repo
   fi
 
-  cd ..
-  rm -rf repo
-
   # ================= UPDATE CACHE & REPORT =================
-
   if [ "$SYNC_STATUS" = "success" ] || [ "$SYNC_STATUS" = "skipped_push" ]; then
-    
-    if [ "$SYNC_STATUS" = "success" ]; then
-        SUCCESS=$((SUCCESS + 1))
-        UPDATED_REPOS+="✅ $fork ($branch)%0A"
-    else
-        NOCHANGE=$((NOCHANGE + 1))
-    fi
-    
-    jq --arg key "$CACHE_KEY" --arg sha "$UPSTREAM_SHA" '.[$key] = $sha' "$CACHE_FILE" > "${CACHE_FILE}.tmp" && mv "${CACHE_FILE}.tmp" "$CACHE_FILE"
-    
-  else
-    FAILED=$((FAILED + 1))
-    FAILED_REPOS+="❌ $fork ($branch)%0A"
-    
-    ERROR_LOG=""
-    if [ -f "$LOG_FILE" ]; then
-        ERROR_LOG=$(tail -n 15 "$LOG_FILE")
-    fi
-    
-    FAIL_MSG="❌ Sync Failed%0A"
-    FAIL_MSG+="Repo: $fork%0A"
-    FAIL_MSG+="Branch: $branch%0A"
-    FAIL_MSG+="Upstream: $upstream%0A%0A"
-    FAIL_MSG+="📝 Log:%0A$ERROR_LOG"
+      if [ "$SYNC_STATUS" = "success" ]; then
+          SUCCESS=$((SUCCESS + 1))
+          UPDATED_REPOS+="✅ $(escape_html "$fork ($branch)")\n"
+      else
+          NOCHANGE=$((NOCHANGE + 1))
+      fi
 
-    curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
-      -d chat_id="$TG_CHAT_ID" \
-      -d text="$FAIL_MSG" >/dev/null
+      jq --arg key "$CACHE_KEY" --arg sha "$UPSTREAM_SHA" '.[$key] = $sha' "$CACHE_FILE" > "${CACHE_FILE}.tmp" && mv "${CACHE_FILE}.tmp" "$CACHE_FILE"
+  else
+      FAILED=$((FAILED + 1))
+      FAILED_REPOS+="❌ $(escape_html "$fork ($branch)")\n"
+
+      ERROR_LOG=""
+      if [ -f "$LOG_FILE" ]; then
+          ERROR_LOG=$(tail -n 15 "$LOG_FILE")
+      fi
+
+      FAIL_MSG="❌ <b>Sync Failed</b>\n"
+      FAIL_MSG+="<b>Repo:</b> $(escape_html "$fork")\n"
+      FAIL_MSG+="<b>Branch:</b> $(escape_html "$branch")\n"
+      FAIL_MSG+="<b>Upstream:</b> $(escape_html "$upstream")\n\n"
+      FAIL_MSG+="📝 <b>Log:</b>\n<pre>$(escape_html "$ERROR_LOG")</pre>"
+
+      send_telegram "$FAIL_MSG" "HTML"
   fi
 
 done
 
 # ================= FINAL REPORT =================
-
 if [ "$TOTAL" -eq "$NOCHANGE" ]; then
-    echo "ℹ️ No changes detected. No Telegram notification sent."
+    echo "ℹ️ No changes detected across all $TOTAL repositories. No Telegram notification sent."
     exit 0
 fi
 
-
-REPORT="📊 *Github 上游同步报告*%0A"
-REPORT+="🕒 时间：$TZ_TIME%0A"
-REPORT+="%0A"
-REPORT+="📦 仓库总数：$TOTAL%0A"
-REPORT+="➖ 无变化：$NOCHANGE%0A"
-REPORT+="🟢 成功更新：$SUCCESS%0A"
-REPORT+="🔴 更新失败：$FAILED%0A"
+REPORT="📊 <b>Github 上游同步报告</b>\n"
+REPORT+="🕒 <b>时间：</b>${TZ_TIME}\n\n"
+REPORT+="📦 <b>仓库总数：</b>${TOTAL}\n"
+REPORT+="➖ <b>无变化：</b>${NOCHANGE}\n"
+REPORT+="🟢 <b>成功更新：</b>${SUCCESS}\n"
+REPORT+="🔴 <b>更新失败：</b>${FAILED}\n"
 
 if [ -n "$UPDATED_REPOS" ]; then
-    REPORT+="%0A🚀 *更新列表*：%0A$UPDATED_REPOS"
+    REPORT+="\n🚀 <b>更新列表：</b>\n${UPDATED_REPOS}"
 fi
 
 if [ -n "$FAILED_REPOS" ]; then
-    REPORT+="%0A💥 *失败列表*：%0A$FAILED_REPOS"
+    REPORT+="\n💥 <b>失败列表：</b>\n${FAILED_REPOS}"
 fi
 
-curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
-  -d chat_id="$TG_CHAT_ID" \
-  -d parse_mode="Markdown" \
-  -d text="$REPORT" >/dev/null
+send_telegram "$REPORT" "HTML"
 
 echo "✅ All done."

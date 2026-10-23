@@ -4,9 +4,12 @@ on:
   schedule:
     - cron: "0 13/24 * * *" 
   workflow_dispatch:
-
-# ❌ 删掉 permissions: contents: write
-# 因为我们不再需要向仓库提交代码，所以不需要写权限，更安全。
+    inputs:
+      force_sync:
+        description: 'Force sync all repos (clean stale bot commits and bypass cache)'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   sync:
@@ -17,37 +20,32 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install jq
-        run: sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
-      # ⭐ 关键步骤 1: 恢复缓存
-      # 尝试寻找以 "sync-state-Linux-" 开头的最新缓存下载下来
+      # 恢复缓存状态
       - name: Restore Sync State
         uses: actions/cache/restore@v4
         with:
           path: sync_state.json
-          # 我们故意用 run_id 作为一个“肯定不存在”的 key，强迫它去匹配 restore-keys
           key: sync-state-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
             sync-state-${{ runner.os }}-
 
-      # 运行脚本 (逻辑不变)
+      # 执行同步脚本
       - name: Run sync
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          FORCE_SYNC: ${{ inputs.force_sync || false }}
         run: |
           chmod +x scripts/sync.sh
-          # 请确保这里的文件名正确 (repos.json / config.json)
           ./scripts/sync.sh repos.json
 
-      # ⭐ 关键步骤 2: 保存新缓存
-      # 只有当脚本运行成功后，才保存新的状态
+      # 保存新的缓存状态
       - name: Save Sync State
         if: success()
         uses: actions/cache/save@v4
         with:
           path: sync_state.json
-          # 使用当前的 run_id 生成一个新的唯一 Key
-          # GitHub 缓存一旦生成就不可修改，所以每次必须存一个新的 Key
           key: sync-state-${{ runner.os }}-${{ github.run_id }}
