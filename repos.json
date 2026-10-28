@@ -190,5 +190,11 @@
     "upstream": "tcchen2026/VibeOffice",
     "branch": "main",
     "notify": true
+  },
+  {
+    "fork": "Marukon/panhub.shenzjd.com",
+    "upstream": "wu529778790/panhub.shenzjd.com",
+    "branch": "main",
+    "notify": true
   }
 ]
