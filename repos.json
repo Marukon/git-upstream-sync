@@ -59,6 +59,13 @@
     "branch": "SukiSU-Ultra",
     "notify": true
   },
+
+  {
+    "fork": "Marukon/Action-Build",
+    "upstream": "Numbersf/Action-Build",
+    "branch": "KernelSU",
+    "notify": true
+  },
   {
     "fork": "Marukon/miaozitie",
     "upstream": "caicaicai/miaozitie",
