@@ -199,6 +199,12 @@
     "notify": true
   },
   {
+    "fork": "Marukon/Geogebra-WebChat",
+    "upstream": "liangdabiao/Geogebra-WebChat",
+    "branch": "main",
+    "notify": true
+  },
+  {
     "fork": "Marukon/panhub.shenzjd.com",
     "upstream": "wu529778790/panhub.shenzjd.com",
     "branch": "main",
