@@ -1,11 +1,5 @@
 [
-  {
-    "fork": "Marukon/pdfcraft",
-    "upstream": "PDFCraftTool/pdfcraft",
-    "branch": "main",
-    "notify": true
-  },
-  {
+ {
     "fork": "Marukon/InstallerX-Revived",
     "upstream": "wxxsfxyzm/InstallerX-Revived",
     "branch": "main",
