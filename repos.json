@@ -177,7 +177,7 @@
   {
     "fork": "Marukon/Sesame-M",
     "upstream": "aw1y2z/Sesame-M",
-    "branch": "MIUIX-api102",
+    "branch": "main",
     "notify": true
   },
   {
