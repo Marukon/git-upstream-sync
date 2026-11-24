@@ -203,5 +203,11 @@
     "upstream": "wu529778790/panhub.shenzjd.com",
     "branch": "main",
     "notify": true
+  },
+  {
+    "fork": "Marukon/ElegantClipboard",
+    "upstream": "Y-ASLant/ElegantClipboard",
+    "branch": "gpui",
+    "notify": true
   }
 ]
